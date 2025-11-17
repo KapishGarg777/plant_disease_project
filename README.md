@@ -1,8 +1,9 @@
-Plant Disease Detection System
+PLANT DISEASE DETECTION SYSTEM
 
 Deep Learning–based Image Classification
 
 This project uses a Convolutional Neural Network (CNN) to automatically detect and classify diseases in plant leaves. It helps farmers, researchers, and agricultural experts diagnose plant diseases early using image-based prediction.
+
 
 Features :
 
@@ -22,6 +23,7 @@ Features :
  
  Supports multiple plant disease classes
 
+
 plant_disease_project/
 
 │
@@ -39,6 +41,7 @@ plant_disease_project/
 ├── test_plant_disease.ipynb    # Testing notebook (uploaded manually)
 
 └── README.md                   # Project documentation
+
 
 How to Run the Project :
 
@@ -62,9 +65,11 @@ pip install -r requirements.txt
    
 python app.py
 
+
 The app will open in the browser
 
 Upload a plant leaf image → get predicted disease & confidence score.
+
 
 Output Screens
 
@@ -88,6 +93,7 @@ Confusion Matrix
 
 <img width="755" height="834" alt="3eec4f46f6ab85fd92cab196dfeaadac_confusion_matrix" src="https://github.com/user-attachments/assets/2d172007-cf30-4217-817c-edea5c1d2c0e" />
 
+
 System Architecture :
 
 User uploads leaf image
@@ -100,9 +106,11 @@ Classifier predicts disease
 
 UI displays output
 
+
 Conclusion :
 
 The Plant Disease Detection System successfully identifies plant diseases with high accuracy using deep learning. It reduces the dependency on manual inspection and supports early detection, better treatment, and increased crop yield.
+
 
 Future Enhancements :
 
@@ -115,6 +123,7 @@ Enlarged dataset for higher accuracy
 Support for more plant species
 
 Bounding box detection for infection regions
+
 
 References :
 
