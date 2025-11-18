@@ -73,17 +73,20 @@ Upload a plant leaf image → get predicted disease & confidence score.
 
 Output Screens
 
-Login Page:
+Login and Sign up Page:
 
-<img width="1491" height="844" alt="3ff541e874b42c870df573695192d412_login_page" src="https://github.com/user-attachments/assets/dd2e7380-5f45-4ca8-b0b9-dd6d7f91a10e" />
+<img width="1425" height="772" alt="image" src="https://github.com/user-attachments/assets/8608be5e-3f46-464b-b9bb-9fdeae3894b4" />
+
 
 Home Page:
 
-<img width="1298" height="618" alt="1cb7f3737c641cfac827d2def1e67d5e_home_page" src="https://github.com/user-attachments/assets/4e725f28-3323-4f2a-8be3-1be5c77e51f1" />
+<img width="1786" height="860" alt="image" src="https://github.com/user-attachments/assets/f282e69d-551b-448a-ae5f-63a1a2706eb3" />
+
 
 Prediction Screen:
 
-<img width="1073" height="723" alt="image" src="https://github.com/user-attachments/assets/a4962fa7-9cb4-4202-8532-811ef270e4eb" />
+<img width="1480" height="849" alt="image" src="https://github.com/user-attachments/assets/ee2e2245-ffd5-44de-a75b-d1ecdd03c4c2" />
+
 
 Accuracy Graph
 
