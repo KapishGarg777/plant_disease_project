@@ -4,6 +4,8 @@ import tensorflow as tf
 import numpy as np
 from PIL import Image
 import os
+import re
+import io
 
 # ----------------- CONFIG -----------------
 USERNAME = "demo"
@@ -14,6 +16,19 @@ ACCENT = "#0f766e"                # accent color for styling
 PAGE_BG = "#f6fbfb"
 TEXT_COLOR = "#0b2545"
 # ------------------------------------------
+
+# ---- New imports for SQL-backed auth ----
+from sqlalchemy import create_engine, Table, Column, Integer, String, MetaData, select
+from sqlalchemy.exc import SQLAlchemyError, IntegrityError
+import bcrypt
+from sqlalchemy.engine.url import make_url
+from dotenv import load_dotenv
+
+# Load .env if present
+load_dotenv()
+
+# Database URL fallback to sqlite file in project root
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///users.db")
 
 # ---- Lightweight page CSS (single-file) ----
 page_css = f"""
@@ -47,32 +62,186 @@ st.markdown(page_css, unsafe_allow_html=True)
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 if "user" not in st.session_state:
+    # keep the same type as original (string) to avoid changing other parts
     st.session_state.user = ""
 
-# ---------------- Login widget ----------------
+# ---------------- Database helpers ----------------
+def get_engine(db_url=DATABASE_URL):
+    try:
+        _ = make_url(db_url)  # validate
+        engine = create_engine(db_url, future=True)
+        return engine
+    except Exception as e:
+        st.error(f"Invalid DATABASE_URL: {e}")
+        raise
+
+def ensure_users_table(engine):
+    meta = MetaData()
+    users = Table(
+        "users", meta,
+        Column("id", Integer, primary_key=True, autoincrement=True),
+        Column("email", String(255), unique=True, nullable=False),
+        Column("password_hash", String(255), nullable=False),
+        Column("display_name", String(255), nullable=True),
+    )
+    meta.create_all(engine)
+    return users
+
+def register_user(engine, users_table, email, password, display_name=None):
+    """
+    Registers a user. Truncates password bytes to 72 bytes before bcrypt hashing.
+    Stores the resulting hash (bytes) decoded to utf-8 for storage in a TEXT column.
+    """
+    email_norm = (email or "").strip().lower()
+    if not email_norm or not password:
+        return False, "Email and password are required."
+    try:
+        # bcrypt supports up to 72 bytes — truncate to 72 bytes
+        pw_bytes = password.encode("utf-8")[:72]
+        hashed = bcrypt.hashpw(pw_bytes, bcrypt.gensalt())  # bytes
+        hashed_str = hashed.decode("utf-8")  # store as string
+        ins = users_table.insert().values(email=email_norm, password_hash=hashed_str, display_name=display_name)
+        with engine.begin() as conn:
+            conn.execute(ins)
+        return True, None
+    except IntegrityError:
+        return False, "An account with this email already exists."
+    except SQLAlchemyError as e:
+        return False, str(e.__dict__.get("orig", e))
+    except Exception as e:
+        return False, str(e)
+
+def verify_user(engine, users_table, email, password):
+    """
+    Verifies a user by truncating the provided password to 72 bytes and passing
+    to bcrypt.checkpw against the stored hash.
+    Returns (True, email) on success or (False, error_message).
+    """
+    email_norm = (email or "").strip().lower()
+    sel = select(users_table).where(users_table.c.email == email_norm)
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(sel).first()
+            if not row:
+                return False, "No account found with that email."
+            stored_hash = row.password_hash  # stored as string
+            if isinstance(stored_hash, str):
+                stored_hash_bytes = stored_hash.encode("utf-8")
+            else:
+                stored_hash_bytes = stored_hash
+            pw_bytes = (password or "").encode("utf-8")[:72]
+            if bcrypt.checkpw(pw_bytes, stored_hash_bytes):
+                # return user email as string (to match original session expectations)
+                user_email = row.email
+                return True, user_email
+            else:
+                return False, "Incorrect password."
+    except SQLAlchemyError as e:
+        return False, str(e.__dict__.get("orig", e))
+    except Exception as e:
+        return False, str(e)
+
+# Initialize DB engine and users table (if DB available)
+_engine = None
+_users_table = None
+try:
+    _engine = get_engine()
+    _users_table = ensure_users_table(_engine)
+except Exception:
+    _engine = None
+    _users_table = None
+    st.warning("User database not initialized. Auth will be disabled if DB issues occur.")
+
+# ---------------- Validation helpers ----------------
+EMAIL_REGEX = re.compile(r"^[\w\.-]+@[\w\.-]+\.\w+$")
+def is_valid_email(email: str):
+    return bool(EMAIL_REGEX.match((email or "").strip()))
+
+def password_strength(password: str):
+    score = 0
+    if len(password) >= 8:
+        score += 1
+    if re.search(r"[A-Z]", password) and re.search(r"[a-z]", password):
+        score += 1
+    if re.search(r"\d", password):
+        score += 1
+    return score
+
+# ---------------- Login widget (SQL-backed, includes Sign up) ----------------
 def login_widget():
-    """Show login widget — returns True once logged in."""
+    """Show login widget — returns True once logged in.
+    This keeps the original UI texts for heading/card but replaces the auth backend.
+    """
     if st.session_state.logged_in:
         return True
 
     st.markdown('<div class="card">', unsafe_allow_html=True)
     st.markdown("### 🔐 Login to continue")
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        user = st.text_input("Username", key="login_user")
-        pwd = st.text_input("Password", type="password", key="login_pwd")
-    with col2:
-        st.write(" ")
-        if st.button("Login", key="login_btn"):
-            if (user or "").strip() == USERNAME and (pwd or "") == PASSWORD:
-                st.session_state.logged_in = True
-                st.session_state.user = user.strip()
-                st.success("Login successful — loading app...")
-                st.rerun()
-            else:
-                st.error("Incorrect username or password.")
+
+    # Provide a simple toggle between Login and Sign up
+    mode = st.radio("", ("Login", "Sign up"), index=0, horizontal=True)
+
+    if mode == "Login":
+        # Keep layout similar to original: two columns
+        col1, col2 = st.columns([2, 1])
+        with col1:
+            user = st.text_input("Email", key="login_user")
+            pwd = st.text_input("Password", type="password", key="login_pwd")
+        with col2:
+            st.write(" ")
+            if st.button("Login", key="login_btn"):
+                # If DB not available, fall back to original demo creds
+                if _engine is None or _users_table is None:
+                    # fallback behavior: allow original demo
+                    if (user or "").strip() == USERNAME and (pwd or "") == PASSWORD:
+                        st.session_state.logged_in = True
+                        st.session_state.user = user.strip()
+                        st.success("Login successful — loading app...")
+                        st.rerun()
+                    else:
+                        st.error("Incorrect username or password, and database unavailable.")
+                else:
+                    ok, res = verify_user(_engine, _users_table, user, pwd)
+                    if ok:
+                        st.session_state.logged_in = True
+                        # keep same type as original: string username/email
+                        st.session_state.user = res
+                        st.success("Login successful — loading app...")
+                        st.rerun()
+                    else:
+                        st.error(res)
+    else:
+        # Sign up mode
+        st.markdown("Create an account to use the Disease Recognition tool.")
+        # Use a small form for sign up
+        with st.form("signup_form"):
+            email = st.text_input("Email", key="signup_email")
+            display_name = st.text_input("Display name (optional)", key="signup_name")
+            pwd = st.text_input("Password", type="password", key="signup_pwd")
+            pwd2 = st.text_input("Confirm Password", type="password", key="signup_pwd2")
+            submitted = st.form_submit_button("Create account")
+            if submitted:
+                if _engine is None or _users_table is None:
+                    st.error("Database not available. Cannot create account.")
+                elif not email or not pwd:
+                    st.error("Please provide email and password.")
+                elif not is_valid_email(email):
+                    st.error("Please enter a valid email address.")
+                elif pwd != pwd2:
+                    st.error("Passwords do not match.")
+                else:
+                    score = password_strength(pwd)
+                    if score < 2:
+                        st.error("Weak password — use at least 8 chars, mixed case and numbers.")
+                    else:
+                        ok, err = register_user(_engine, _users_table, email, pwd, display_name)
+                        if ok:
+                            st.success("Account created. You can now switch to Login and sign in.")
+                        else:
+                            st.error(f"Could not create account: {err}")
+
     st.markdown("</div>", unsafe_allow_html=True)
-    return False
+    return st.session_state.logged_in
 
 # ---------------- Model loader (cached) ----------------
 @st.cache_resource
@@ -86,19 +255,19 @@ def load_model(path=MODEL_PATH):
         return None, str(e)
 
 # ---------------- Prediction helper (matches original behavior) ----------------
-def predict_from_uploaded_no_scaling(uploaded_file, model):
+def predict_from_image_bytes(image_bytes, model):
     """
-    This uses the same pipeline as your original working app:
-    - open with PIL
-    - resize to IMG_SIZE
-    - convert to array via keras img_to_array style (values 0..255)
-    - batchify
-    - model.predict
-    - return raw preds (we will use np.argmax on raw output to match original)
+    image_bytes: raw bytes of the uploaded file
+    Uses same pipeline your original app used:
+      - open with PIL
+      - resize to IMG_SIZE
+      - convert to array via keras img_to_array style (values 0..255)
+      - batchify
+      - model.predict
+      - return raw preds
     """
-    pil_img = Image.open(uploaded_file).convert("RGB")
+    pil_img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
     pil_img = pil_img.resize(IMG_SIZE)
-    # Use keras-like array conversion but without scaling
     arr = tf.keras.preprocessing.image.img_to_array(pil_img)  # dtype float32, values 0..255
     arr = np.expand_dims(arr, axis=0)  # shape (1,H,W,3)
     preds = model.predict(arr)
@@ -145,6 +314,7 @@ with st.sidebar:
     st.markdown("Choose a page to continue.")
     st.markdown("</div>", unsafe_allow_html=True)
     st.markdown(" ")
+    # Keep the same display logic as original
     st.markdown(f"**Logged in as:** {st.session_state.user or USERNAME}")
     page = st.selectbox("Select Page", ["Home", "About", "Disease Recognition", "Logout"])
     st.markdown("---")
@@ -209,9 +379,13 @@ elif page == "Disease Recognition":
 
     uploaded_file = st.file_uploader("Choose an Image:", type=["jpg", "jpeg", "png"])
 
+    image_bytes = None
     if uploaded_file is not None:
         try:
-            st.image(uploaded_file, use_container_width=True)
+            # Read bytes once and use for display and prediction to avoid pointer issues
+            image_bytes = uploaded_file.read()
+            pil_for_display = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+            st.image(pil_for_display, use_container_width=True)
         except Exception:
             st.error("Uploaded file could not be displayed as an image.")
 
@@ -220,7 +394,7 @@ elif page == "Disease Recognition":
     with col2:
         st.write(" ")
         if st.button("Predict"):
-            if uploaded_file is None:
+            if image_bytes is None:
                 st.error("⚠ Please upload an image first!")
             else:
                 if model is None:
@@ -228,7 +402,7 @@ elif page == "Disease Recognition":
                 else:
                     with st.spinner("Running model..."):
                         try:
-                            preds = predict_from_uploaded_no_scaling(uploaded_file, model)
+                            preds = predict_from_image_bytes(image_bytes, model)
                             # MATCH ORIGINAL: use raw prediction argmax (no softmax, no scaling)
                             if preds is None:
                                 st.error("Model returned no output.")
